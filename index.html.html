@@ -1,0 +1,1564 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mappa Lavagna — v4 (Save/Load JSON)</title>
+  <style>
+    :root{
+      --ui-bg: rgba(10,14,22,.78);
+      --ui-bd: rgba(255,255,255,.14);
+      --ui-tx: rgba(255,255,255,.92);
+      --ui-tx2: rgba(255,255,255,.72);
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --sel: rgba(255,255,255,.92);
+    }
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #0b0f19; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: var(--ui-tx);}
+    * { box-sizing: border-box; }
+    button, select, input, textarea { font-family: inherit; }
+
+    #app { position: relative; width: 100vw; height: 100vh; }
+    #viewport { position: absolute; inset: 0; overflow: hidden; touch-action: none; background: #0b0f19; }
+    #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+    #map { position: absolute; left: 0; top: 0; user-select: none; -webkit-user-drag: none; }
+    #objects { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+
+    /* Grid overlay */
+    #grid {
+      position:absolute; left:0; top:0; width:100%; height:100%;
+      pointer-events:none; opacity:.55; display:none;
+    }
+    #grid.on{ display:block; }
+    #grid::before{
+      content:""; position:absolute; inset:0;
+      background:
+        repeating-linear-gradient(to right,
+          rgba(255,255,255,.12) 0,
+          rgba(255,255,255,.12) 1px,
+          transparent 1px,
+          transparent 40px),
+        repeating-linear-gradient(to bottom,
+          rgba(255,255,255,.12) 0,
+          rgba(255,255,255,.12) 1px,
+          transparent 1px,
+          transparent 40px);
+      filter: drop-shadow(0 0 8px rgba(0,0,0,.25));
+    }
+
+    /* Objects */
+    .obj{
+      position:absolute;
+      transform: translate(-50%, -50%);
+      cursor: grab;
+      user-select:none;
+      touch-action:none;
+    }
+    .obj.locked{ cursor:not-allowed; opacity:.92; }
+    .obj.selected::after{
+      content:"";
+      position:absolute; inset:-8px;
+      border:2px dashed var(--sel);
+      border-radius:14px;
+      pointer-events:none;
+      filter: drop-shadow(0 0 6px rgba(255,255,255,.15));
+    }
+
+    /* Label */
+    .label{
+      padding: 6px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.22);
+      color: #fff;
+      font-weight: 800;
+      letter-spacing: .2px;
+      min-width: 24px;
+      text-align: left;
+      backdrop-filter: blur(6px);
+      box-shadow: var(--shadow);
+      white-space: pre-wrap;
+      line-height: 1.15;
+    }
+    .label.editing{
+      outline: 2px solid rgba(255,255,255,.65);
+      cursor: text;
+    }
+
+    /* Name under pawn/circle */
+    .nameTag{
+      position:absolute;
+      left:50%;
+      top: calc(100% + 6px);
+      transform: translateX(-50%);
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(0,0,0,.45);
+      border: 1px solid rgba(255,255,255,.20);
+      color: rgba(255,255,255,.92);
+      font-weight: 900;
+      letter-spacing: .2px;
+      white-space: nowrap;
+      pointer-events:none;
+      box-shadow: 0 8px 18px rgba(0,0,0,.25);
+      backdrop-filter: blur(6px);
+    }
+
+    /* Outline shapes */
+    .shapeOutline{
+      background: transparent;
+      box-shadow: 0 8px 20px rgba(0,0,0,.20);
+      pointer-events: none;
+    }
+    .shapeRing{ border-radius: 999px; }
+
+    /* V marker */
+    .vMarker{
+      position: relative;
+      background: transparent;
+      pointer-events: none;
+    }
+    .vMarker .arm{
+      position:absolute;
+      left: 6px;
+      top: 50%;
+      height: 0;
+      border-top: 4px solid rgba(255,255,255,.9);
+      transform-origin: 0 50%;
+      border-radius: 4px;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,.25));
+    }
+    .vMarker .arm.a1{ transform: translateY(-50%) rotate(-16deg); }
+    .vMarker .arm.a2{ transform: translateY(-50%) rotate(16deg); }
+
+    /* Arrow rendering */
+    .arrowWrap{ position: relative; width: 100%; height: 100%; pointer-events: none; }
+    .arrowShaft{
+      position:absolute; left:0; top:50%;
+      transform: translateY(-50%);
+      border-radius: 999px;
+      width: 100%;
+    }
+    .arrowHead{
+      position:absolute; right:0; top:50%;
+      transform: translateY(-50%);
+      width:0; height:0;
+      border-top: 10px solid transparent;
+      border-bottom: 10px solid transparent;
+      border-left: 18px solid #fff;
+    }
+
+    /* UI */
+    #toolbar{
+      position:absolute; left:12px; top:12px;
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+      padding:10px 12px;
+      background: var(--ui-bg);
+      border: 1px solid var(--ui-bd);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      z-index: 10;
+      backdrop-filter: blur(10px);
+      max-width: calc(100vw - 300px);
+    }
+    .btn{
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.14);
+      color: var(--ui-tx);
+      padding: 8px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 900;
+      font-size: 13px;
+      display:flex; align-items:center; gap:8px;
+    }
+    .btn:hover{ background: rgba(255,255,255,.12); }
+    .btn.active{ outline: 2px solid rgba(255,255,255,.35); }
+    .btn.toggled{ outline: 2px solid rgba(255,255,255,.55); }
+    .iconOnly{ width: 40px; justify-content:center; padding: 8px 0; }
+    .sep{ width:1px; height:30px; background: rgba(255,255,255,.14); margin:0 2px; }
+
+    .mini{
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 12px;
+      padding: 6px 10px;
+      display:flex; align-items:center; gap:8px;
+    }
+    .mini label{ font-size:12px; color: var(--ui-tx2); font-weight:900; }
+    select{
+      background: rgba(0,0,0,.22);
+      color: var(--ui-tx);
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 10px;
+      padding: 6px 8px;
+      font-weight: 900;
+      outline: none;
+    }
+    #palette { display:flex; gap:6px; align-items:center; }
+    .swatch{
+      width:18px; height:18px; border-radius:6px;
+      border:1px solid rgba(255,255,255,.18);
+      cursor:pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    }
+    .swatch.selected{ outline:2px solid rgba(255,255,255,.7); }
+
+    #sizeWrap{ display:flex; gap:8px; align-items:center; }
+    #sizeVal{ font-size: 12px; color: var(--ui-tx2); min-width: 34px; text-align:right; font-weight: 900;}
+    input[type="range"]{ width: 140px; }
+
+    /* Legend */
+    #legend{
+      position:absolute; right:12px; top:12px; bottom:12px;
+      width:260px;
+      background: var(--ui-bg);
+      border:1px solid var(--ui-bd);
+      border-radius:16px;
+      box-shadow: var(--shadow);
+      z-index:10;
+      backdrop-filter: blur(10px);
+      display:flex; flex-direction:column;
+      overflow:hidden;
+    }
+    #legendHeader{
+      padding:12px 12px 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+    }
+    #legendHeader h3{ margin:0; font-size:14px; letter-spacing:.2px; }
+    #legendHeader .small{ font-size:11px; color: var(--ui-tx2); font-weight:900; }
+    #legendList{ padding:8px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+
+    .li{
+      display:grid;
+      grid-template-columns: 18px 1fr auto;
+      gap:8px;
+      align-items:center;
+      padding: 8px 8px;
+      border-radius:12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+    }
+    .li:hover{ background: rgba(255,255,255,.09); }
+    .dot{ width: 14px; height: 14px; border-radius: 6px; border: 1px solid rgba(255,255,255,.2); }
+    .liTitle{ display:flex; flex-direction:column; gap:2px; cursor:pointer; min-width:0; }
+    .liTitle .t1{ font-weight:900; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .liTitle .t2{ font-weight:800; font-size:11px; color: var(--ui-tx2); }
+    .liActions{ display:flex; gap:6px; }
+    .iconBtn{
+      width: 28px; height: 28px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.08);
+      cursor: pointer;
+      color: var(--ui-tx);
+      font-weight: 900;
+      display:grid; place-items:center;
+      line-height: 1;
+    }
+    .iconBtn:hover{ background: rgba(255,255,255,.12); }
+
+    .editBox{
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(0,0,0,.25);
+      color: rgba(255,255,255,.92);
+      font-weight: 900;
+      outline: none;
+      font-size: 12px;
+      resize: none;
+    }
+    .editHint{
+      font-size: 10px;
+      color: rgba(255,255,255,.62);
+      font-weight: 900;
+    }
+
+    #help{
+      position:absolute; left:12px; bottom:12px;
+      padding:10px 12px;
+      background: rgba(10,14,22,.62);
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:14px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      backdrop-filter: blur(8px);
+      font-size:12px;
+      color: rgba(255,255,255,.78);
+      z-index:10;
+      max-width: calc(100vw - 300px);
+      line-height: 1.25;
+    }
+    kbd{
+      padding:2px 6px; border-radius:8px;
+      border:1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08);
+      font-weight:900;
+      color: rgba(255,255,255,.9);
+    }
+
+    .presentation #toolbar,
+    .presentation #legend,
+    .presentation #help{ display:none !important; }
+    .legendHidden #legend{ display:none !important; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport">
+    <div id="world">
+      <img id="map" alt="mappa" />
+      <div id="objects"></div>
+      <div id="grid"></div>
+    </div>
+  </div>
+
+  <div id="toolbar">
+    <button class="btn iconOnly active" id="toolSelect" title="Seleziona">🖱</button>
+    <button class="btn iconOnly" id="toolLabel" title="Etichetta">A</button>
+    <button class="btn iconOnly" id="toolPawn" title="Pedina">♟</button>
+    <button class="btn iconOnly" id="toolCircle" title="Cerchio pieno">●</button>
+
+    <div class="mini" title="Forme vuote e V">
+      <label>Forme</label>
+      <select id="shapeSelect">
+        <option value="">—</option>
+        <option value="ring">Cerchio vuoto</option>
+        <option value="square">Quadrato vuoto</option>
+        <option value="vcone">V (vista)</option>
+      </select>
+    </div>
+
+    <div class="mini" title="Linee/frecce: clic+trascina+rilascia">
+      <label>Disegno</label>
+      <select id="drawSelect">
+        <option value="">—</option>
+        <option value="line">Linea</option>
+        <option value="arrow">Freccia</option>
+        <option value="dasharrow">Freccia tratteggiata</option>
+      </select>
+    </div>
+
+    <div class="sep"></div>
+
+    <div id="palette" title="Colore attivo"></div>
+
+    <div class="mini" id="sizeWrap" title="Dimensione selezionato (Shift+rotellina)">
+      <label>Dim</label>
+      <input id="sizeRange" type="range" min="18" max="240" step="2" value="44" />
+      <span id="sizeVal">44</span>
+    </div>
+
+    <button class="btn iconOnly" id="btnGrid" title="Griglia">#</button>
+    <button class="btn iconOnly" id="btnSnap" title="Snap (solo pedine/cerchi)">🧲</button>
+    <button class="btn iconOnly" id="btnLegend" title="Mostra/Nascondi legenda (L)">📜</button>
+
+    <button class="btn iconOnly" id="btnLoadMap" title="Carica mappa immagine">🖼</button>
+    <input id="fileMap" type="file" accept="image/*" style="display:none" />
+
+    <div class="sep"></div>
+
+    <button class="btn iconOnly" id="btnQuickSave" title="Salva veloce (browser)">💾</button>
+    <button class="btn iconOnly" id="btnQuickLoad" title="Carica veloce (browser)">📂</button>
+
+    <button class="btn iconOnly" id="btnExport" title="Esporta progetto (JSON)">⬇️</button>
+    <button class="btn iconOnly" id="btnImport" title="Importa progetto (JSON)">⬆️</button>
+    <input id="fileProject" type="file" accept="application/json,.json" style="display:none" />
+
+    <button class="btn iconOnly" id="btnPresent" title="Presentazione (Esc per uscire)">🎬</button>
+    <button class="btn iconOnly" id="btnReset" title="Reset vista">⤾</button>
+    <button class="btn iconOnly" id="btnDelete" title="Elimina selezionato (Del)">✕</button>
+  </div>
+
+  <aside id="legend">
+    <div id="legendHeader">
+      <div>
+        <h3>Legenda</h3>
+        <div class="small">clic = centra</div>
+      </div>
+      <div class="small" id="countInfo">0</div>
+    </div>
+    <div id="legendList"></div>
+  </aside>
+
+  <div id="help">
+    Pan: trascina sfondo • Zoom: rotellina • Resize: <kbd>Shift</kbd>+rotellina • Elimina: <kbd>Del</kbd><br/>
+    Etichetta: doppio click per edit • <kbd>Shift</kbd>+<kbd>Invio</kbd> = a capo • <kbd>Esc</kbd> annulla edit<br/>
+    V (vista): seleziona e usa <kbd>Q</kbd>/<kbd>E</kbd> • Tasto destro: torna a Seleziona • Legenda: <kbd>L</kbd><br/>
+    Salvataggi: 💾/📂 (browser) • ⬇️/⬆️ (JSON da condividere)
+  </div>
+</div>
+
+<script>
+(() => {
+  // ===== Config =====
+  const DEFAULT_MAP_URL = ""; // puoi metterci un path tipo "map.png"
+  const LS_KEY = "mappaLavagna_v4_quicksave";
+  const LS_MAP = "mappaLavagna_v4_mapDataUrl";
+  const VERSION = 4;
+
+  const COLORS = [
+    "#ff3b30","#ff9500","#ffd60a","#34c759",
+    "#00c7be","#30b0ff","#007aff","#5856d6",
+    "#af52de","#ff2d55","#8e8e93","#ffffff",
+    "#a2845e","#7dffb2","#ff7ab6","#c7c7cc"
+  ];
+
+  // ===== Elements =====
+  const app = document.getElementById("app");
+  const viewport = document.getElementById("viewport");
+  const world = document.getElementById("world");
+  const mapEl = document.getElementById("map");
+  const objectsEl = document.getElementById("objects");
+  const gridEl = document.getElementById("grid");
+
+  const legendList = document.getElementById("legendList");
+  const countInfo = document.getElementById("countInfo");
+
+  const toolSelectBtn = document.getElementById("toolSelect");
+  const toolLabelBtn  = document.getElementById("toolLabel");
+  const toolPawnBtn   = document.getElementById("toolPawn");
+  const toolCircleBtn = document.getElementById("toolCircle");
+  const shapeSelect   = document.getElementById("shapeSelect");
+  const drawSelect    = document.getElementById("drawSelect");
+
+  const paletteEl = document.getElementById("palette");
+  const sizeRange = document.getElementById("sizeRange");
+  const sizeVal   = document.getElementById("sizeVal");
+
+  const btnGrid = document.getElementById("btnGrid");
+  const btnSnap = document.getElementById("btnSnap");
+  const btnLegend = document.getElementById("btnLegend");
+
+  const btnLoadMap = document.getElementById("btnLoadMap");
+  const fileMap = document.getElementById("fileMap");
+
+  const btnQuickSave = document.getElementById("btnQuickSave");
+  const btnQuickLoad = document.getElementById("btnQuickLoad");
+  const btnExport = document.getElementById("btnExport");
+  const btnImport = document.getElementById("btnImport");
+  const fileProject = document.getElementById("fileProject");
+
+  const btnPresent = document.getElementById("btnPresent");
+  const btnReset = document.getElementById("btnReset");
+  const btnDelete = document.getElementById("btnDelete");
+
+  // ===== State =====
+  let scale = 1, tx = 0, ty = 0;
+  let tool = "select";
+  let activeColor = COLORS[0];
+  let selectedId = null;
+
+  let gridOn = false;
+  let snapOn = false;
+  const SNAP_STEP = 40;
+
+  let presentation = false;
+  let legendHidden = false;
+
+  let items = []; // objects
+  let editingLabelId = null;
+  let labelEditBackup = "";
+  let editingLegendId = null; // id in legend editor
+
+  let panning = false;
+  let panStart = null;
+
+  let draggingObj = null;
+  let dragStart = null;
+
+  let drawing = null; // {tempId}
+
+  const uid = () => Math.random().toString(36).slice(2,9);
+
+  // ===== Helpers =====
+  function rgbaFromHex(hex, alpha){
+    let h = (hex || "#ffffff").replace("#","").trim();
+    if(h.length === 3) h = h.split("").map(ch => ch+ch).join("");
+    const r = parseInt(h.slice(0,2),16);
+    const g = parseInt(h.slice(2,4),16);
+    const b = parseInt(h.slice(4,6),16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  function clampScale(s){ return Math.max(0.2, Math.min(4.0, s)); }
+  function applyTransform(){ world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
+  function screenToWorld(px, py){
+    const rect = viewport.getBoundingClientRect();
+    const sx = px - rect.left;
+    const sy = py - rect.top;
+    return { x: (sx - tx) / scale, y: (sy - ty) / scale };
+  }
+  function snap(v){ return Math.round(v / SNAP_STEP) * SNAP_STEP; }
+  function getSelected(){ return items.find(it => it.id === selectedId) || null; }
+  function bringToFront(it){
+    const maxZ = items.reduce((m,x)=>Math.max(m, x.z||0), 0);
+    it.z = maxZ + 1;
+  }
+
+  // ===== Pawn SVG =====
+  function pawnDataUri(color){
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+        <defs>
+          <filter id="s" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,.35)"/>
+          </filter>
+          <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="rgba(255,255,255,.28)"/>
+            <stop offset="1" stop-color="rgba(0,0,0,.18)"/>
+          </linearGradient>
+        </defs>
+        <g filter="url(#s)">
+          <path d="M32 8c-6.1 0-11 4.9-11 11 0 4.6 2.8 8.6 6.9 10.3C21.6 33.1 17 40.1 17 48c0 5 4 8 9 8h12c5 0 9-3 9-8 0-7.9-4.6-14.9-10.9-18.7C40.2 27.6 43 23.6 43 19c0-6.1-4.9-11-11-11z"
+                fill="${color}" stroke="rgba(255,255,255,.22)" stroke-width="2"/>
+          <path d="M22 48c0-8.8 6.2-16 10-16s10 7.2 10 16c0 2.6-1.7 4-4 4H26c-2.3 0-4-1.4-4-4z"
+                fill="url(#g)" opacity=".55"/>
+          <ellipse cx="32" cy="56.2" rx="18" ry="5.2" fill="rgba(0,0,0,.25)"/>
+        </g>
+      </svg>`;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  }
+
+  // ===== Tools =====
+  function setTool(next){
+    tool = next;
+    [toolSelectBtn, toolLabelBtn, toolPawnBtn, toolCircleBtn].forEach(b => b.classList.remove("active"));
+    if(next === "select") toolSelectBtn.classList.add("active");
+    if(next === "label") toolLabelBtn.classList.add("active");
+    if(next === "pawn")  toolPawnBtn.classList.add("active");
+    if(next === "circle")toolCircleBtn.classList.add("active");
+  }
+  function isCreationToolActive(){
+    return tool === "label" || tool === "pawn" || tool === "circle" || tool === "shape" || tool === "draw";
+  }
+
+  // ===== Label edit (on-canvas) =====
+  function startLabelEdit(id){
+    const it = items.find(x => x.id === id);
+    if(!it || it.type !== "label" || it.locked) return;
+    editingLabelId = id;
+    labelEditBackup = it.text || "";
+    render();
+
+    const el = objectsEl.querySelector(`.obj[data-id="${id}"] .label`);
+    if(el){
+      el.classList.add("editing");
+      el.setAttribute("contenteditable","true");
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+  function stopLabelEdit(commit){
+    if(!editingLabelId) return;
+    const it = items.find(x => x.id === editingLabelId);
+    const el = objectsEl.querySelector(`.obj[data-id="${editingLabelId}"] .label`);
+    if(it && el){
+      const current = (el.textContent || "");
+      const cleaned = current.trim();
+      it.text = commit ? (cleaned || "A") : (labelEditBackup || "A");
+      el.classList.remove("editing");
+      el.removeAttribute("contenteditable");
+    }
+    editingLabelId = null;
+    labelEditBackup = "";
+  }
+
+  // ===== Selection =====
+  function clearSelection(){
+    stopLabelEdit(true);
+    editingLegendId = null;
+    selectedId = null;
+    render();
+  }
+  function selectItem(id){
+    stopLabelEdit(true);
+    editingLegendId = null;
+    selectedId = id;
+    const sel = getSelected();
+    if(sel?.size){
+      sizeRange.value = String(sel.size);
+      sizeVal.textContent = String(sel.size);
+    }
+    render();
+  }
+
+  // ===== Add/remove =====
+  function addItem(it){
+    it.id = uid();
+    it.hidden = false;
+    it.locked = false;
+    it.z = (items.reduce((m,x)=>Math.max(m, x.z||0), 0) + 1);
+    items.push(it);
+    selectedId = it.id;
+    render();
+    scheduleAutosave();
+    return it.id;
+  }
+  function removeItem(id){
+    stopLabelEdit(true);
+    if(editingLegendId === id) editingLegendId = null;
+    items = items.filter(it => it.id !== id);
+    if(selectedId === id) selectedId = null;
+    render();
+    scheduleAutosave();
+  }
+
+  // ===== View =====
+  function centerOn(wx, wy){
+    const rect = viewport.getBoundingClientRect();
+    tx = (rect.width/2) - (wx * scale);
+    ty = (rect.height/2) - (wy * scale);
+    applyTransform();
+  }
+  function resetView(){
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    const mw = mapEl.naturalWidth || 1;
+    const mh = mapEl.naturalHeight || 1;
+    const s = Math.min(vw/mw, vh/mh);
+    scale = clampScale(s);
+    tx = (vw - mw*scale) / 2;
+    ty = (vh - mh*scale) / 2;
+    applyTransform();
+  }
+
+  // ===== Palette =====
+  function renderPalette(){
+    paletteEl.innerHTML = "";
+    for(const c of COLORS){
+      const s = document.createElement("div");
+      s.className = "swatch";
+      s.style.background = c;
+      s.classList.toggle("selected", c === activeColor);
+      s.onclick = () => {
+        if(presentation) return;
+        activeColor = c;
+        renderPalette();
+        const sel = getSelected();
+        if(sel && !sel.locked){
+          sel.color = c;
+          render();
+          scheduleAutosave();
+        }
+      };
+      paletteEl.appendChild(s);
+    }
+  }
+
+  // ===== Map =====
+  function loadMapFromLocalStorage(){
+    try{
+      const dataUrl = localStorage.getItem(LS_MAP);
+      if(dataUrl && dataUrl.startsWith("data:image/")){
+        mapEl.src = dataUrl;
+        return true;
+      }
+    }catch{}
+    return false;
+  }
+  function saveMapToLocalStorage(dataUrl){
+    // può fallire se troppo grande → in quel caso non blocchiamo nulla
+    try{ localStorage.setItem(LS_MAP, dataUrl); }catch{}
+  }
+
+  mapEl.onload = () => {
+    world.style.width  = mapEl.naturalWidth + "px";
+    world.style.height = mapEl.naturalHeight + "px";
+    resetView();
+  };
+
+  // ===== Save/Load Project =====
+  function getProjectObject(){
+    return {
+      version: VERSION,
+      ts: Date.now(),
+      view: { scale, tx, ty },
+      settings: { gridOn, snapOn, activeColor },
+      items: items
+    };
+  }
+
+  function applyProjectObject(obj){
+    if(!obj || typeof obj !== "object") return false;
+    if(!Array.isArray(obj.items)) return false;
+
+    // stop editing
+    stopLabelEdit(true);
+    editingLegendId = null;
+    selectedId = null;
+
+    items = obj.items.map(x => ({...x}));
+    // validate minimal fields
+    for(const it of items){
+      if(!it.id) it.id = uid();
+      if(it.z == null) it.z = 1;
+      if(it.hidden == null) it.hidden = false;
+      if(it.locked == null) it.locked = false;
+    }
+
+    if(obj.view){
+      scale = clampScale(Number(obj.view.scale || 1));
+      tx = Number(obj.view.tx || 0);
+      ty = Number(obj.view.ty || 0);
+      applyTransform();
+    }
+
+    if(obj.settings){
+      gridOn = !!obj.settings.gridOn;
+      snapOn = !!obj.settings.snapOn;
+      activeColor = obj.settings.activeColor || activeColor;
+      gridEl.classList.toggle("on", gridOn);
+      btnGrid.classList.toggle("toggled", gridOn);
+      btnSnap.classList.toggle("toggled", snapOn);
+      renderPalette();
+    }
+
+    render();
+    scheduleAutosave(true);
+    return true;
+  }
+
+  function quickSave(){
+    const obj = getProjectObject();
+    try{
+      localStorage.setItem(LS_KEY, JSON.stringify(obj));
+      // piccolo feedback "silenzioso": lampeggio bottone
+      btnQuickSave.classList.add("toggled");
+      setTimeout(()=>btnQuickSave.classList.remove("toggled"), 220);
+      return true;
+    }catch{
+      alert("Salvataggio veloce non riuscito (storage pieno?). Usa Esporta JSON.");
+      return false;
+    }
+  }
+
+  function quickLoad(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(!raw){
+        alert("Nessun salvataggio veloce trovato.");
+        return false;
+      }
+      const obj = JSON.parse(raw);
+      const ok = applyProjectObject(obj);
+      if(!ok) alert("Salvataggio veloce corrotto o incompatibile.");
+      return ok;
+    }catch{
+      alert("Caricamento veloce non riuscito.");
+      return false;
+    }
+  }
+
+  function exportJSON(){
+    const obj = getProjectObject();
+    const blob = new Blob([JSON.stringify(obj, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g,"-");
+    a.href = URL.createObjectURL(blob);
+    a.download = `mappa_progetto_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function importJSONFile(file){
+    const reader = new FileReader();
+    reader.onload = () => {
+      try{
+        const obj = JSON.parse(String(reader.result || ""));
+        const ok = applyProjectObject(obj);
+        if(!ok) alert("JSON non valido.");
+      }catch{
+        alert("Impossibile leggere il JSON.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Autosave throttled
+  let autosaveTimer = null;
+  function scheduleAutosave(immediate=false){
+    if(immediate){ quickSave(); return; }
+    if(autosaveTimer) return;
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      quickSave();
+    }, 700);
+  }
+
+  // ===== UI wiring =====
+  toolSelectBtn.onclick = () => { shapeSelect.value=""; drawSelect.value=""; setTool("select"); };
+  toolLabelBtn.onclick  = () => { shapeSelect.value=""; drawSelect.value=""; setTool("label"); };
+  toolPawnBtn.onclick   = () => { shapeSelect.value=""; drawSelect.value=""; setTool("pawn"); };
+  toolCircleBtn.onclick = () => { shapeSelect.value=""; drawSelect.value=""; setTool("circle"); };
+
+  shapeSelect.onchange = () => {
+    drawSelect.value = "";
+    if(shapeSelect.value){
+      tool = "shape";
+      [toolSelectBtn, toolLabelBtn, toolPawnBtn, toolCircleBtn].forEach(b => b.classList.remove("active"));
+    }else setTool("select");
+  };
+  drawSelect.onchange = () => {
+    shapeSelect.value = "";
+    if(drawSelect.value){
+      tool = "draw";
+      [toolSelectBtn, toolLabelBtn, toolPawnBtn, toolCircleBtn].forEach(b => b.classList.remove("active"));
+    }else setTool("select");
+  };
+
+  sizeVal.textContent = sizeRange.value;
+  sizeRange.oninput = () => {
+    sizeVal.textContent = sizeRange.value;
+    const sel = getSelected();
+    if(sel && !sel.locked && !presentation){
+      sel.size = Number(sizeRange.value);
+      render();
+      scheduleAutosave();
+    }
+  };
+
+  btnGrid.onclick = () => {
+    if(presentation) return;
+    gridOn = !gridOn;
+    gridEl.classList.toggle("on", gridOn);
+    btnGrid.classList.toggle("toggled", gridOn);
+    scheduleAutosave();
+  };
+  btnSnap.onclick = () => {
+    if(presentation) return;
+    snapOn = !snapOn;
+    btnSnap.classList.toggle("toggled", snapOn);
+    scheduleAutosave();
+  };
+  btnLegend.onclick = () => {
+    legendHidden = !legendHidden;
+    app.classList.toggle("legendHidden", legendHidden);
+    btnLegend.classList.toggle("toggled", legendHidden);
+  };
+
+  btnReset.onclick = () => { if(!presentation) resetView(); };
+  btnDelete.onclick = () => { if(!presentation && selectedId) removeItem(selectedId); };
+
+  btnLoadMap.onclick = () => { if(!presentation) { fileMap.value=""; fileMap.click(); } };
+  fileMap.onchange = () => {
+    const f = fileMap.files && fileMap.files[0];
+    if(!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      if(dataUrl.startsWith("data:image/")){
+        mapEl.src = dataUrl;
+        saveMapToLocalStorage(dataUrl);
+      }
+    };
+    reader.readAsDataURL(f);
+  };
+
+  btnQuickSave.onclick = () => { if(!presentation) quickSave(); };
+  btnQuickLoad.onclick = () => { if(!presentation) quickLoad(); };
+  btnExport.onclick = () => { if(!presentation) exportJSON(); };
+  btnImport.onclick = () => { if(!presentation) { fileProject.value=""; fileProject.click(); } };
+  fileProject.onchange = () => {
+    const f = fileProject.files && fileProject.files[0];
+    if(!f) return;
+    importJSONFile(f);
+  };
+
+  function setPresentation(on){
+    presentation = on;
+    app.classList.toggle("presentation", presentation);
+    btnPresent.classList.toggle("toggled", presentation);
+    stopLabelEdit(true);
+    editingLegendId = null;
+    selectedId = null;
+    draggingObj = null;
+    drawing = null;
+    render();
+  }
+  btnPresent.onclick = () => setPresentation(!presentation);
+
+  // ===== Right click behaviour =====
+  viewport.addEventListener("contextmenu", (e) => e.preventDefault());
+  viewport.addEventListener("pointerdown", (e) => {
+    if(presentation) return;
+    if(e.button === 2){
+      // always deselect + return to select
+      clearSelection();
+      if(isCreationToolActive()){
+        shapeSelect.value = "";
+        drawSelect.value = "";
+        setTool("select");
+      }
+    }
+  }, true);
+
+  // ===== Keyboard =====
+  window.addEventListener("keydown", (e) => {
+    if(e.key === "Escape" && presentation){ setPresentation(false); return; }
+
+    const ae = document.activeElement;
+    const isTextField =
+      ae && (
+        ae.tagName === "INPUT" ||
+        ae.tagName === "TEXTAREA" ||
+        (ae.getAttribute && ae.getAttribute("contenteditable") === "true")
+      );
+    if(isTextField) return;
+    if(presentation) return;
+
+    if(e.key === "l" || e.key === "L") btnLegend.click();
+
+    if(e.key === "q" || e.key === "Q" || e.key === "e" || e.key === "E"){
+      const sel = getSelected();
+      if(sel && sel.type === "vcone" && !sel.locked){
+        sel.angle = (sel.angle || 0) + ((e.key.toLowerCase()==="q") ? -10 : 10);
+        render();
+        scheduleAutosave();
+      }
+    }
+
+    if(e.key === "Delete" || e.key === "Backspace"){
+      if(selectedId) removeItem(selectedId);
+    }
+  });
+
+  // ===== Pan / place / draw =====
+  viewport.addEventListener("pointerdown", (e) => {
+    if(presentation) return;
+    if(e.button !== 0) return;
+    if(e.target.closest(".obj")) return;
+
+    const {x,y} = screenToWorld(e.clientX, e.clientY);
+
+    // draw (paint style)
+    if(tool === "draw" && drawSelect.value){
+      const t = drawSelect.value;
+      const item = { type:t, x1:x, y1:y, x2:x, y2:y, color: activeColor, size: Number(sizeRange.value) };
+      const id = addItem(item);
+      drawing = { tempId:id };
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // shape
+    if(tool === "shape" && shapeSelect.value){
+      const t = shapeSelect.value;
+      const px = snapOn ? snap(x) : x;
+      const py = snapOn ? snap(y) : y;
+      if(t === "vcone") addItem({ type:"vcone", x:px, y:py, size:Number(sizeRange.value), color:activeColor, angle:0 });
+      else addItem({ type:t, x:px, y:py, size:Number(sizeRange.value), color:activeColor });
+      shapeSelect.value = "";
+      setTool("select");
+      return;
+    }
+
+    if(tool === "label"){ addItem({ type:"label", x, y, size:Number(sizeRange.value), color:activeColor, text:"A" }); return; }
+    if(tool === "pawn"){ addItem({ type:"pawn", x: snapOn ? snap(x) : x, y: snapOn ? snap(y) : y, size:Number(sizeRange.value), color:activeColor, name:"" }); return; }
+    if(tool === "circle"){ addItem({ type:"circle", x: snapOn ? snap(x) : x, y: snapOn ? snap(y) : y, size:Number(sizeRange.value), color:activeColor, name:"" }); return; }
+
+    // select tool -> pan
+    clearSelection();
+    panning = true;
+    panStart = { x:e.clientX, y:e.clientY, tx, ty };
+    viewport.setPointerCapture(e.pointerId);
+  });
+
+  viewport.addEventListener("pointermove", (e) => {
+    if(presentation) return;
+
+    if(drawing){
+      const {x,y} = screenToWorld(e.clientX, e.clientY);
+      const it = items.find(o => o.id === drawing.tempId);
+      if(it){
+        it.x2 = x; it.y2 = y;
+        render();
+      }
+      return;
+    }
+
+    if(!panning) return;
+    const dx = e.clientX - panStart.x;
+    const dy = e.clientY - panStart.y;
+    tx = panStart.tx + dx;
+    ty = panStart.ty + dy;
+    applyTransform();
+  });
+
+  viewport.addEventListener("pointerup", (e) => {
+    if(presentation) return;
+
+    if(drawing){
+      drawing = null;
+      drawSelect.value = "";
+      setTool("select");
+      render();
+      scheduleAutosave();
+    }
+
+    panning = false;
+    try{ viewport.releasePointerCapture(e.pointerId); }catch{}
+  });
+
+  viewport.addEventListener("wheel", (e) => {
+    if(presentation) return;
+    e.preventDefault();
+
+    const sel = getSelected();
+    if(e.shiftKey && sel && !sel.locked && sel.size != null){
+      const delta = e.deltaY < 0 ? 2 : -2;
+      sel.size = Math.max(10, Math.min(420, (sel.size||44) + delta));
+      sizeRange.value = String(sel.size);
+      sizeVal.textContent = String(sel.size);
+      render();
+      scheduleAutosave();
+      return;
+    }
+
+    const {x:wx, y:wy} = screenToWorld(e.clientX, e.clientY);
+    const zoomIntensity = 0.0012;
+    const delta = -e.deltaY;
+    const nextScale = clampScale(scale * (1 + delta * zoomIntensity));
+
+    const rect = viewport.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+
+    tx = sx - wx * nextScale;
+    ty = sy - wy * nextScale;
+    scale = nextScale;
+    applyTransform();
+    scheduleAutosave();
+  }, { passive:false });
+
+  // ===== Object drag/select =====
+  objectsEl.addEventListener("pointerdown", (e) => {
+    if(presentation) return;
+    if(e.button !== 0) return;
+
+    const objEl = e.target.closest(".obj");
+    if(!objEl) return;
+
+    const id = objEl.dataset.id;
+    const it = items.find(x => x.id === id);
+    if(!it) return;
+
+    // if editing label, and click elsewhere -> commit
+    if(editingLabelId && editingLabelId !== id) stopLabelEdit(true);
+    editingLegendId = null;
+
+    selectedId = id;
+    bringToFront(it);
+
+    if(it.locked){ render(); return; }
+
+    const w = screenToWorld(e.clientX, e.clientY);
+    draggingObj = it;
+
+    if(it.type === "line" || it.type === "arrow" || it.type === "dasharrow"){
+      dragStart = { wx:w.x, wy:w.y, x1:it.x1, y1:it.y1, x2:it.x2, y2:it.y2 };
+    } else {
+      dragStart = { wx:w.x, wy:w.y, ix:it.x, iy:it.y };
+    }
+
+    objEl.setPointerCapture(e.pointerId);
+    render();
+  });
+
+  objectsEl.addEventListener("pointermove", (e) => {
+    if(presentation) return;
+    if(!draggingObj) return;
+
+    const w = screenToWorld(e.clientX, e.clientY);
+    const dx = w.x - dragStart.wx;
+    const dy = w.y - dragStart.wy;
+
+    if(draggingObj.type === "line" || draggingObj.type === "arrow" || draggingObj.type === "dasharrow"){
+      draggingObj.x1 = dragStart.x1 + dx;
+      draggingObj.y1 = dragStart.y1 + dy;
+      draggingObj.x2 = dragStart.x2 + dx;
+      draggingObj.y2 = dragStart.y2 + dy;
+      render();
+      return;
+    }
+
+    let nx = dragStart.ix + dx;
+    let ny = dragStart.iy + dy;
+
+    if(snapOn && (draggingObj.type === "pawn" || draggingObj.type === "circle")){
+      nx = snap(nx); ny = snap(ny);
+    }
+
+    draggingObj.x = nx;
+    draggingObj.y = ny;
+
+    const el = objectsEl.querySelector(`.obj[data-id="${draggingObj.id}"]`);
+    if(el){
+      el.style.left = nx + "px";
+      el.style.top  = ny + "px";
+    }
+  });
+
+  objectsEl.addEventListener("pointerup", () => {
+    if(draggingObj){
+      draggingObj = null;
+      dragStart = null;
+      renderLegend();
+      scheduleAutosave();
+    }
+  });
+
+  // ===== Label double click to edit (and it works) =====
+  objectsEl.addEventListener("dblclick", (e) => {
+    if(presentation) return;
+    const objEl = e.target.closest(".obj");
+    if(!objEl) return;
+    const id = objEl.dataset.id;
+    const it = items.find(x => x.id === id);
+    if(it && it.type === "label" && !it.locked){
+      selectedId = id;
+      startLabelEdit(id);
+    }
+  });
+
+  // commit edit if click outside label
+  viewport.addEventListener("pointerdown", (e) => {
+    if(presentation) return;
+    const insideLabel = e.target.closest && e.target.closest(".label");
+    if(!insideLabel && editingLabelId){
+      stopLabelEdit(true);
+      render();
+      scheduleAutosave();
+    }
+  }, true);
+
+  // label key handling (Shift+Enter new line)
+  objectsEl.addEventListener("keydown", (e) => {
+    if(!editingLabelId) return;
+    const lab = objectsEl.querySelector(`.obj[data-id="${editingLabelId}"] .label`);
+    if(!lab) return;
+
+    if(e.key === "Enter" && e.shiftKey){
+      e.preventDefault();
+      document.execCommand("insertLineBreak");
+      return;
+    }
+    if(e.key === "Enter"){
+      e.preventDefault();
+      stopLabelEdit(true);
+      render();
+      scheduleAutosave();
+      return;
+    }
+    if(e.key === "Escape"){
+      e.preventDefault();
+      stopLabelEdit(false);
+      render();
+      scheduleAutosave();
+      return;
+    }
+  }, true);
+
+  // ===== Render =====
+  function render(){
+    // items
+    const sorted = [...items].sort((a,b)=>(a.z||0)-(b.z||0));
+    objectsEl.innerHTML = "";
+
+    for(const it of sorted){
+      if(it.hidden) continue;
+
+      const el = document.createElement("div");
+      el.className = "obj";
+      el.dataset.id = it.id;
+      if(it.id === selectedId) el.classList.add("selected");
+      if(it.locked) el.classList.add("locked");
+      el.style.zIndex = String(it.z || 0);
+
+      // Default pos
+      el.style.left = (it.x ?? 0) + "px";
+      el.style.top  = (it.y ?? 0) + "px";
+      el.style.transform = "translate(-50%, -50%)";
+
+      if(it.type === "pawn"){
+        el.style.width = it.size + "px";
+        el.style.height = it.size + "px";
+        el.style.backgroundImage = `url("${pawnDataUri(it.color)}")`;
+        el.style.backgroundRepeat = "no-repeat";
+        el.style.backgroundPosition = "center";
+        el.style.backgroundSize = "contain";
+      }
+
+      if(it.type === "circle"){
+        el.style.width = it.size + "px";
+        el.style.height = it.size + "px";
+        el.style.borderRadius = "999px";
+        el.style.background = it.color;
+        el.style.border = "2px solid rgba(255,255,255,.25)";
+        el.style.boxShadow = "0 8px 20px rgba(0,0,0,.25)";
+      }
+
+      if(it.type === "label"){
+        const lab = document.createElement("div");
+        lab.className = "label";
+        lab.textContent = it.text ?? "A";
+        lab.style.fontSize = Math.max(12, Math.round(it.size * 0.5)) + "px";
+
+        lab.style.background = rgbaFromHex(it.color || "#ffffff", 0.28);
+        lab.style.borderColor = rgbaFromHex(it.color || "#ffffff", 0.45);
+        if((it.color||"").toLowerCase() === "#ffffff"){
+          lab.style.background = "rgba(0,0,0,.30)";
+          lab.style.borderColor = "rgba(255,255,255,.25)";
+        }
+
+        if(editingLabelId === it.id){
+          lab.classList.add("editing");
+          lab.setAttribute("contenteditable","true");
+        }
+
+        // important: block drag only while editing
+        lab.addEventListener("pointerdown", (ev) => {
+          if(lab.classList.contains("editing") || lab.getAttribute("contenteditable")==="true"){
+            ev.stopPropagation();
+          }
+        });
+
+        el.appendChild(lab);
+      }
+
+      if(it.type === "ring" || it.type === "square"){
+        el.style.width = it.size + "px";
+        el.style.height = it.size + "px";
+
+        const box = document.createElement("div");
+        box.className = "shapeOutline" + (it.type === "ring" ? " shapeRing" : "");
+        box.style.width = it.size + "px";
+        box.style.height = it.size + "px";
+        box.style.borderStyle = "solid";
+        const w = Math.max(2, Math.round((it.size||44)/18));
+        box.style.borderWidth = w + "px";
+        box.style.borderColor = it.color || "#ffffff";
+        box.style.borderRadius = (it.type === "ring") ? "999px" : "12px";
+        el.appendChild(box);
+      }
+
+      if(it.type === "vcone"){
+        el.style.transform = `translate(-50%, -50%) rotate(${it.angle||0}deg)`;
+        const v = document.createElement("div");
+        v.className = "vMarker";
+        v.style.width = (it.size + 16) + "px";
+        v.style.height = Math.max(40, Math.round(it.size*0.75)) + "px";
+
+        const w = Math.max(2, Math.round((it.size||44)/18));
+        const a1 = document.createElement("div");
+        a1.className = "arm a1";
+        const a2 = document.createElement("div");
+        a2.className = "arm a2";
+        a1.style.borderTopColor = it.color || "#ffffff";
+        a2.style.borderTopColor = it.color || "#ffffff";
+        a1.style.borderTopWidth = w + "px";
+        a2.style.borderTopWidth = w + "px";
+        a1.style.width = (it.size) + "px";
+        a2.style.width = (it.size) + "px";
+        v.appendChild(a1); v.appendChild(a2);
+        el.appendChild(v);
+      }
+
+      if(it.type === "line" || it.type === "arrow" || it.type === "dasharrow"){
+        const dx = it.x2 - it.x1;
+        const dy = it.y2 - it.y1;
+        const len = Math.max(10, Math.hypot(dx, dy));
+        const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+        const thick = Math.max(2, Math.round((it.size || 44) / 3));
+        const col = it.color || "#ffffff";
+
+        el.style.left = it.x1 + "px";
+        el.style.top  = it.y1 + "px";
+        el.style.width = len + "px";
+        el.style.height = Math.max(18, thick * 3) + "px";
+        el.style.transform = `translate(0, -50%) rotate(${ang}deg)`;
+        el.style.transformOrigin = "0 50%";
+
+        const wrap = document.createElement("div");
+        wrap.className = "arrowWrap";
+
+        const shaft = document.createElement("div");
+        shaft.className = "arrowShaft";
+        shaft.style.height = thick + "px";
+
+        if(it.type === "dasharrow"){
+          const dash = Math.max(10, Math.round(thick * 1.2));
+          const gap  = Math.max(8,  Math.round(thick * 0.9));
+          shaft.style.background = `repeating-linear-gradient(to right, ${col} 0 ${dash}px, transparent ${dash}px ${dash+gap}px)`;
+        } else {
+          shaft.style.background = col;
+        }
+
+        wrap.appendChild(shaft);
+
+        if(it.type === "arrow" || it.type === "dasharrow"){
+          const head = document.createElement("div");
+          head.className = "arrowHead";
+          const headH = Math.round(thick * 1.2);
+          const headW = Math.round(thick * 1.8);
+          head.style.borderTopWidth = headH + "px";
+          head.style.borderBottomWidth = headH + "px";
+          head.style.borderLeftWidth = headW + "px";
+          head.style.borderLeftColor = col;
+          wrap.appendChild(head);
+        }
+
+        el.appendChild(wrap);
+      }
+
+      if((it.type === "pawn" || it.type === "circle") && it.name && it.name.trim()){
+        const tag = document.createElement("div");
+        tag.className = "nameTag";
+        tag.textContent = it.name.trim().slice(0,10);
+        const fs = Math.max(10, Math.min(14, Math.round(it.size * 0.22)));
+        tag.style.fontSize = fs + "px";
+        tag.style.borderColor = rgbaFromHex(it.color, 0.35);
+        tag.style.background = rgbaFromHex(it.color, 0.20);
+        if((it.color||"").toLowerCase() === "#ffffff"){
+          tag.style.background = "rgba(0,0,0,.45)";
+          tag.style.borderColor = "rgba(255,255,255,.20)";
+        }
+        el.appendChild(tag);
+      }
+
+      objectsEl.appendChild(el);
+    }
+
+    renderLegend();
+  }
+
+  function renderLegend(){
+    legendList.innerHTML = "";
+    countInfo.textContent = String(items.length);
+
+    const ordered = [...items].reverse();
+    for(const it of ordered){
+      const row = document.createElement("div");
+      row.className = "li";
+
+      const dot = document.createElement("div");
+      dot.className = "dot";
+      dot.style.background = it.type === "label" ? rgbaFromHex(it.color||"#ffffff", 0.6) : (it.color || "#ffffff");
+
+      const title = document.createElement("div");
+      title.className = "liTitle";
+
+      const typeName = ({
+        label:"Etichetta", pawn:"Pedina", circle:"Cerchio",
+        ring:"Cerchio vuoto", square:"Quadrato vuoto", vcone:"V (vista)",
+        line:"Linea", arrow:"Freccia", dasharrow:"Freccia tratteggiata"
+      })[it.type] || it.type;
+
+      if(editingLegendId === it.id){
+        const isLabel = it.type === "label";
+        const box = document.createElement(isLabel ? "textarea" : "input");
+        box.className = "editBox";
+        if(isLabel){
+          box.rows = 2;
+          box.maxLength = 60;
+          box.value = it.text || "";
+          box.placeholder = "Testo etichetta (Shift+Invio = a capo)";
+        }else{
+          box.maxLength = 10;
+          box.value = it.name || "";
+          box.placeholder = "Soprannome (max 10)";
+        }
+
+        const hint = document.createElement("div");
+        hint.className = "editHint";
+        hint.textContent = isLabel ? "Invio=salva • Shift+Invio=a capo • Esc=annulla" : "Invio=salva • Esc=annulla";
+
+        title.appendChild(box);
+        title.appendChild(hint);
+
+        setTimeout(()=>box.focus(), 0);
+
+        const commit = () => {
+          if(isLabel){
+            const t = (box.value || "").trim();
+            it.text = t || "A";
+          }else{
+            it.name = (box.value || "").trim().slice(0,10);
+          }
+          editingLegendId = null;
+          render();
+          scheduleAutosave();
+        };
+        const cancel = () => { editingLegendId = null; renderLegend(); };
+
+        box.addEventListener("keydown", (e) => {
+          e.stopPropagation();
+          if(e.key === "Escape"){ e.preventDefault(); cancel(); return; }
+          if(isLabel){
+            if(e.key === "Enter" && e.shiftKey) return;
+            if(e.key === "Enter"){ e.preventDefault(); commit(); return; }
+          }else{
+            if(e.key === "Enter"){ e.preventDefault(); commit(); return; }
+          }
+        });
+        box.addEventListener("blur", () => commit());
+      } else {
+        const main = document.createElement("div");
+        main.className = "t1";
+        if(it.type === "label"){
+          const preview = (it.text || "A").replace(/\s+/g," ").trim();
+          main.textContent = `“${preview.slice(0,18)}${preview.length>18 ? "…" : ""}” — ${typeName}`;
+        } else if(it.name && it.name.trim()){
+          main.textContent = `${it.name.trim().slice(0,10)} — ${typeName}`;
+        } else {
+          main.textContent = typeName;
+        }
+
+        const sub = document.createElement("div");
+        sub.className = "t2";
+        if(it.type === "line" || it.type === "arrow" || it.type === "dasharrow"){
+          sub.textContent = `(${Math.round(it.x1)},${Math.round(it.y1)})→(${Math.round(it.x2)},${Math.round(it.y2)})`;
+        } else {
+          sub.textContent = `x:${Math.round(it.x)} y:${Math.round(it.y)} • dim:${it.size||44}`;
+        }
+
+        title.appendChild(main);
+        title.appendChild(sub);
+
+        title.onclick = () => {
+          if(presentation) return;
+          selectItem(it.id);
+          if(it.type === "line" || it.type === "arrow" || it.type === "dasharrow") centerOn(it.x1, it.y1);
+          else centerOn(it.x, it.y);
+        };
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "liActions";
+
+      // edit pen for: pawn/circle/label
+      const btnPen = document.createElement("button");
+      btnPen.className = "iconBtn";
+      btnPen.title = "Modifica testo/nome";
+      btnPen.textContent = "✎";
+      btnPen.onclick = (e) => {
+        e.stopPropagation();
+        if(presentation) return;
+        if(it.type === "pawn" || it.type === "circle" || it.type === "label"){
+          editingLegendId = it.id;
+          renderLegend();
+        }
+      };
+      if(!(it.type === "pawn" || it.type === "circle" || it.type === "label")){
+        btnPen.style.opacity = "0.35";
+        btnPen.style.cursor = "not-allowed";
+      }
+
+      const btnEye = document.createElement("button");
+      btnEye.className = "iconBtn";
+      btnEye.title = it.hidden ? "Mostra" : "Nascondi";
+      btnEye.textContent = it.hidden ? "👁" : "🙈";
+      btnEye.onclick = (e) => {
+        e.stopPropagation();
+        if(presentation) return;
+        it.hidden = !it.hidden;
+        render();
+        scheduleAutosave();
+      };
+
+      const btnLock = document.createElement("button");
+      btnLock.className = "iconBtn";
+      btnLock.title = it.locked ? "Sblocca" : "Blocca";
+      btnLock.textContent = it.locked ? "🔒" : "🔓";
+      btnLock.onclick = (e) => {
+        e.stopPropagation();
+        if(presentation) return;
+        it.locked = !it.locked;
+        render();
+        scheduleAutosave();
+      };
+
+      const btnX = document.createElement("button");
+      btnX.className = "iconBtn";
+      btnX.title = "Elimina";
+      btnX.textContent = "✕";
+      btnX.onclick = (e) => {
+        e.stopPropagation();
+        if(presentation) return;
+        removeItem(it.id);
+      };
+
+      actions.append(btnPen, btnEye, btnLock, btnX);
+      row.append(dot, title, actions);
+      legendList.appendChild(row);
+    }
+  }
+
+  // ===== Startup: palette + map + quickload =====
+  renderPalette();
+
+  // Map load
+  if(!loadMapFromLocalStorage()){
+    if(DEFAULT_MAP_URL) mapEl.src = DEFAULT_MAP_URL;
+    else mapEl.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/er8y9kAAAAASUVORK5CYII=";
+  }
+
+  // Try auto quickload if present
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(raw){
+      const obj = JSON.parse(raw);
+      if(obj && obj.items) applyProjectObject(obj);
+    }
+  }catch{}
+
+  // ===== Apply project helper used in startup =====
+  function applyProjectObject(obj){
+    if(!obj || typeof obj !== "object") return false;
+    if(!Array.isArray(obj.items)) return false;
+
+    stopLabelEdit(true);
+    editingLegendId = null;
+    selectedId = null;
+
+    items = obj.items.map(x => ({...x}));
+    for(const it of items){
+      if(!it.id) it.id = uid();
+      if(it.z == null) it.z = 1;
+      if(it.hidden == null) it.hidden = false;
+      if(it.locked == null) it.locked = false;
+    }
+
+    if(obj.view){
+      scale = clampScale(Number(obj.view.scale || 1));
+      tx = Number(obj.view.tx || 0);
+      ty = Number(obj.view.ty || 0);
+      applyTransform();
+    }
+
+    if(obj.settings){
+      gridOn = !!obj.settings.gridOn;
+      snapOn = !!obj.settings.snapOn;
+      activeColor = obj.settings.activeColor || activeColor;
+      gridEl.classList.toggle("on", gridOn);
+      btnGrid.classList.toggle("toggled", gridOn);
+      btnSnap.classList.toggle("toggled", snapOn);
+      renderPalette();
+    }
+
+    render();
+    return true;
+  }
+
+  // ===== Done =====
+  setTool("select");
+  render();
+})();
+</script>
+</body>
+</html>
